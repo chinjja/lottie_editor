@@ -44,7 +44,9 @@ class Item with _$Item {
 extension ItemX on Item {
   Item move(Offset d) {
     return copyWith(
-      transform: transform..translate(d.dx, d.dy),
+      transform: transform
+        ..clone()
+        ..translate(d.dx, d.dy),
     );
   }
 }
