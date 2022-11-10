@@ -1,6 +1,8 @@
 import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:lottie_editor/model/model.dart';
 
 class KeyframeView extends StatelessWidget {
@@ -19,6 +21,11 @@ class KeyframeEditor extends StatefulWidget {
   State<KeyframeEditor> createState() => _KeyframeEditorState();
 }
 
+enum ContextMode {
+  view,
+  edit,
+}
+
 class _KeyframeEditorState extends State<KeyframeEditor>
     with SingleTickerProviderStateMixin {
   final scrollController = ScrollController();
@@ -30,6 +37,8 @@ class _KeyframeEditorState extends State<KeyframeEditor>
   double itemExtent = 36.0;
   double scrollOffset = 0.0;
   int framesPerItem = 10;
+  final view = Matrix4.identity();
+  ContextMode mode = ContextMode.view;
 
   @override
   void initState() {
@@ -90,6 +99,7 @@ class _KeyframeEditorState extends State<KeyframeEditor>
   Item? selected;
   final rand = math.Random();
   late BoxConstraints constraints;
+  int lastId = 1;
 
   Color _genColor() {
     return Color.fromARGB(
@@ -128,38 +138,60 @@ class _KeyframeEditorState extends State<KeyframeEditor>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Animation'),
-        actions: [
-          IconButton(
-            onPressed: () {
-              setState(() {
-                final b = rand.nextBool();
-                final s = 100 * (0.5 + rand.nextDouble());
-                final o = Offset(
-                  rand.nextDouble() * (constraints.maxWidth - s),
-                  rand.nextDouble() * (constraints.maxHeight - s),
-                );
-                final item = (b)
-                    ? Item.circle(
-                        color: _genColor(),
-                        tl: o,
-                        br: o + Offset(s, s),
-                      )
-                    : Item.rectangle(
-                        color: _genColor(),
-                        tl: o,
-                        br: o + Offset(s, s),
+      appBar: mode == ContextMode.view
+          ? AppBar(
+              title: const Text('Animation View'),
+              actions: [
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      final center = Offset(
+                        rand.nextDouble(),
+                        rand.nextDouble(),
                       );
-
-                items.add(item);
-                animations.add(_genAnimation(item));
-              });
-            },
-            icon: const Icon(Icons.add),
-          ),
-        ],
-      ),
+                      const model = Model(
+                        origin: Offset(50, 50),
+                        data: [
+                          Offset.zero,
+                          Offset(100, 0),
+                          Offset(100, 100),
+                          Offset(0, 100),
+                        ],
+                      );
+                      final item = Item(
+                        id: lastId,
+                        color: _genColor(),
+                        model: model,
+                        transform:
+                            Matrix4.translationValues(center.dx, center.dy, 0),
+                      );
+                      lastId++;
+                      items.add(item);
+                      animations.add(_genAnimation(item));
+                    });
+                  },
+                  icon: const Icon(Icons.add),
+                ),
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      mode = ContextMode.edit;
+                    });
+                  },
+                  icon: const Icon(Icons.edit),
+                )
+              ],
+            )
+          : AppBar(
+              title: const Text('Animation Editor'),
+              leading: BackButton(
+                onPressed: () {
+                  setState(() {
+                    mode = ContextMode.view;
+                  });
+                },
+              ),
+            ),
       body: SafeArea(
         child: Column(
           children: [
@@ -167,159 +199,254 @@ class _KeyframeEditorState extends State<KeyframeEditor>
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   this.constraints = constraints;
-                  return Stack(
-                    children: [
-                      ...items.asMap().map(
-                        (i, item) {
-                          return MapEntry(
-                            i,
-                            AnimatedBuilder(
-                              animation: animationController,
-                              builder: (context, child) {
-                                return Positioned(
-                                  left: item.tl.dx + animations[i].value.dx,
-                                  top: item.tl.dy + animations[i].value.dy,
-                                  child: Draggable(
-                                    feedback: const SizedBox(),
-                                    onDragUpdate: (details) {
-                                      setState(() {
-                                        items[i] =
-                                            selected = item.move(details.delta);
-                                      });
-                                    },
-                                    child: GestureDetector(
-                                      onTap: () {
-                                        setState(() {
-                                          selected = item;
-                                        });
-                                      },
-                                      child: ItemWidget(
-                                        item: item,
-                                        selected: item == selected,
+                  return ClipRect(
+                    child: Transform(
+                      transform: view,
+                      child: Stack(
+                        children: [
+                          const SizedBox.expand(),
+                          ...items
+                              .where((e) {
+                                if (mode == ContextMode.view) return true;
+                                return e == selected;
+                              })
+                              .toList()
+                              .asMap()
+                              .map(
+                                (i, item) {
+                                  return MapEntry(
+                                    i,
+                                    Transform(
+                                      transform: item.transform,
+                                      child: AnimatedBuilder(
+                                        key: ValueKey(item.id),
+                                        animation: animationController,
+                                        builder: (context, child) {
+                                          Widget child = ItemWidget(
+                                            item: item,
+                                            selected: item == selected,
+                                          );
+                                          if (mode == ContextMode.view) {
+                                            child = Transform.translate(
+                                              offset: animations[i].value,
+                                              child: GestureDetector(
+                                                onTapDown: (details) {
+                                                  setState(() {
+                                                    selected = item;
+                                                  });
+                                                },
+                                                onPanUpdate: (details) {
+                                                  setState(() {
+                                                    items[i] = selected = item
+                                                        .move(details.delta);
+                                                  });
+                                                },
+                                                child: child,
+                                              ),
+                                            );
+                                          } else {
+                                            child = Stack(
+                                              clipBehavior: Clip.none,
+                                              children: [
+                                                child,
+                                                for (Offset point
+                                                    in item.model.data) ...[
+                                                  Positioned(
+                                                    top: -20 + point.dx,
+                                                    left: -20 + point.dy,
+                                                    child: GestureDetector(
+                                                      onPanUpdate: (details) {
+                                                        // setState(() {
+                                                        //   items[i] = selected =
+                                                        //       item.copyWith.model(
+                                                        //     tl: item.model.tl +
+                                                        //         details.delta,
+                                                        //   );
+                                                        // });
+                                                      },
+                                                      child: const Icon(
+                                                        Icons.circle_outlined,
+                                                        size: 40,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ]
+                                              ],
+                                            );
+                                          }
+                                          return child;
+                                        },
                                       ),
                                     ),
-                                  ),
-                                );
-                              },
-                            ),
-                          );
-                        },
-                      ).values
-                    ],
+                                  );
+                                },
+                              )
+                              .values
+                              .map(
+                                (e) => Positioned(
+                                  top: 0,
+                                  left: 0,
+                                  child: e,
+                                ),
+                              ),
+                        ],
+                      ),
+                    ),
                   );
                 },
               ),
             ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  onPressed: () {
-                    if (animationController.isCompleted) {
+            if (mode == ContextMode.view) ...[
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    onPressed: () {
+                      if (animationController.isCompleted) {
+                        animationController.reset();
+                      }
+                      if (animationController.isAnimating) {
+                        animationController.stop();
+                      } else {
+                        animationController.forward();
+                      }
+                    },
+                    icon: animationController.isAnimating
+                        ? const Icon(Icons.stop)
+                        : const Icon(Icons.play_arrow),
+                  ),
+                  IconButton(
+                    onPressed: () {
                       animationController.reset();
-                    }
-                    if (animationController.isAnimating) {
+                    },
+                    icon: const Icon(Icons.replay),
+                  ),
+                  TextButton(
+                    onPressed: () {
                       animationController.stop();
-                    } else {
-                      animationController.forward();
-                    }
-                  },
-                  icon: animationController.isAnimating
-                      ? const Icon(Icons.stop)
-                      : const Icon(Icons.play_arrow),
-                ),
-                IconButton(
-                  onPressed: () {
-                    animationController.reset();
-                  },
-                  icon: const Icon(Icons.replay),
-                ),
-                TextButton(
-                  onPressed: () {
-                    animationController.stop();
-                    if (animationController.duration!.inSeconds <= 1) return;
-                    setState(() {
-                      animationController.duration =
-                          animationController.duration! -
-                              const Duration(seconds: 1);
-                    });
-                  },
-                  child: const Text('-1s'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    animationController.stop();
-                    if (animationController.duration!.inSeconds >= 10) return;
-                    setState(() {
-                      animationController.duration =
-                          animationController.duration! +
-                              const Duration(seconds: 1);
-                    });
-                  },
-                  child: const Text('+1s'),
-                ),
-              ],
-            ),
-            const Divider(),
-            Stack(
-              children: [
-                SizedBox(
-                  height: 150,
-                  child: ListView.builder(
-                    controller: scrollController,
-                    scrollDirection: Axis.horizontal,
-                    padding: EdgeInsets.only(left: itemExtent / 2),
-                    itemCount: (frameCount + 120) ~/ 10,
-                    itemExtent: itemExtent,
-                    itemBuilder: (context, index) {
-                      return TimelineTile(
-                        frameCount: frameCount,
-                        start: index * 10,
-                        end: index * 10 + 10,
+                      if (animationController.duration!.inSeconds <= 1) return;
+                      setState(() {
+                        animationController.duration =
+                            animationController.duration! -
+                                const Duration(seconds: 1);
+                      });
+                    },
+                    child: const Text('-1s'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      animationController.stop();
+                      if (animationController.duration!.inSeconds >= 10) return;
+                      setState(() {
+                        animationController.duration =
+                            animationController.duration! +
+                                const Duration(seconds: 1);
+                      });
+                    },
+                    child: const Text('+1s'),
+                  ),
+                ],
+              ),
+              const Divider(),
+              Stack(
+                children: [
+                  SizedBox(
+                    height: 150,
+                    child: ListView.builder(
+                      controller: scrollController,
+                      scrollDirection: Axis.horizontal,
+                      padding: EdgeInsets.only(left: itemExtent / 2),
+                      itemCount: (frameCount + 120) ~/ 10,
+                      itemExtent: itemExtent,
+                      itemBuilder: (context, index) {
+                        return TimelineTile(
+                          frameCount: frameCount,
+                          start: index * 10,
+                          end: index * 10 + 10,
+                        );
+                      },
+                    ),
+                  ),
+                  AnimatedBuilder(
+                    animation: animationController,
+                    builder: (context, child) {
+                      return Positioned(
+                        top: 0,
+                        bottom: 0,
+                        left: itemExtent / 2 +
+                            _rateToPixels(animationController.value) -
+                            scrollOffset,
+                        child: Container(
+                          color: Colors.blue,
+                          width: 2,
+                        ),
                       );
                     },
                   ),
-                ),
-                AnimatedBuilder(
-                  animation: animationController,
-                  builder: (context, child) {
-                    return Positioned(
-                      top: 0,
-                      bottom: 0,
-                      left: itemExtent / 2 +
-                          _rateToPixels(animationController.value) -
-                          scrollOffset,
-                      child: Container(
-                        color: Colors.blue,
-                        width: 2,
-                      ),
-                    );
-                  },
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onHorizontalDragUpdate: (details) {
-                      animationController.value +=
-                          _pixelsToRate(details.delta.dx);
-                    },
-                    onTapUp: (details) {
-                      final dx = details.localPosition.dx;
-                      animationController.value =
-                          _pixelsToRate(dx - itemExtent / 2 - scrollOffset);
-                    },
-                    child: const SizedBox(height: 40),
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onHorizontalDragUpdate: (details) {
+                        animationController.value +=
+                            _pixelsToRate(details.delta.dx);
+                      },
+                      onTapUp: (details) {
+                        final dx = details.localPosition.dx;
+                        animationController.value =
+                            _pixelsToRate(dx - itemExtent / 2 - scrollOffset);
+                      },
+                      child: const SizedBox(height: 40),
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+}
+
+class ModelPainter extends CustomPainter {
+  final Item item;
+  final bool selected;
+
+  ModelPainter({required this.item, required this.selected});
+
+  @override
+  bool? hitTest(Offset position) {
+    final path = Path()..addPolygon(item.model.data, true);
+    return path.contains(position);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()..addPolygon(item.model.data, true);
+
+    final paint = Paint();
+    paint.color = item.color;
+    paint.style = PaintingStyle.fill;
+    canvas.drawPath(path, paint);
+
+    if (selected) {
+      paint.color = Colors.black;
+      paint.style = PaintingStyle.stroke;
+      paint.strokeWidth = 2;
+      canvas.drawPath(path, paint);
+    }
+
+    paint.color = Colors.black;
+    paint.style = PaintingStyle.fill;
+    canvas.drawCircle(item.model.origin, 2, paint);
+  }
+
+  @override
+  bool shouldRepaint(ModelPainter oldDelegate) {
+    return item != oldDelegate.item;
   }
 }
 
@@ -334,16 +461,11 @@ class ItemWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: (item.br - item.tl).dx,
-      height: (item.br - item.tl).dy,
-      decoration: BoxDecoration(
-        color: item.color,
-        shape: item.map(
-          circle: (e) => BoxShape.circle,
-          rectangle: (e) => BoxShape.rectangle,
-        ),
-        border: selected ? Border.all(width: 4) : null,
+    return SizedBox(
+      width: 100,
+      height: 100,
+      child: CustomPaint(
+        painter: ModelPainter(item: item, selected: selected),
       ),
     );
   }

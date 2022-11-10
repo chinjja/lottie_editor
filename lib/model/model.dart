@@ -14,28 +14,37 @@ class Keyframe with _$Keyframe {
 }
 
 @freezed
-class Item with _$Item {
-  const factory Item.circle({
-    int? id,
-    @Default([]) List<Keyframe> keyframes,
-    required Color color,
-    required Offset tl,
-    required Offset br,
-  }) = _CircleItem;
+class Model with _$Model {
+  const factory Model({
+    required Offset origin,
+    required List<Offset> data,
+  }) = _Model;
+}
 
-  const factory Item.rectangle({
+extension ModelX on Model {
+  Model move(Offset offset) {
+    return copyWith(
+      origin: origin + offset,
+      data: data.map((e) => e + offset).toList(),
+    );
+  }
+}
+
+@freezed
+class Item with _$Item {
+  const factory Item({
     int? id,
     @Default([]) List<Keyframe> keyframes,
     required Color color,
-    required Offset tl,
-    required Offset br,
-  }) = _RectangleItem;
+    required Matrix4 transform,
+    required Model model,
+  }) = _Item;
 }
 
 extension ItemX on Item {
   Item move(Offset d) {
-    return copyWith(tl: tl + d, br: br + d);
+    return copyWith(
+      transform: transform..translate(d.dx, d.dy),
+    );
   }
-
-  Offset get center => tl + (br - tl) / 2;
 }
