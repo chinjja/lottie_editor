@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -343,6 +344,31 @@ class _KeyframeEditorState extends State<KeyframeEditor>
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                TextButton(
+                  onPressed: () {
+                    animationController.stop();
+                    if (animationController.duration!.inSeconds >= 10) return;
+                    setState(() {
+                      animationController.duration =
+                          animationController.duration! +
+                              const Duration(seconds: 1);
+                    });
+                  },
+                  child: const Text('+1s'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    animationController.stop();
+                    if (animationController.duration!.inSeconds <= 1) return;
+                    setState(() {
+                      animationController.duration =
+                          animationController.duration! -
+                              const Duration(seconds: 1);
+                    });
+                  },
+                  child: const Text('-1s'),
+                ),
+                const Spacer(),
                 IconButton(
                   onPressed: () {
                     if (animationController.isCompleted) {
@@ -364,29 +390,53 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                   },
                   icon: const Icon(Icons.replay),
                 ),
-                TextButton(
+                const Spacer(),
+                IconButton(
                   onPressed: () {
-                    animationController.stop();
-                    if (animationController.duration!.inSeconds <= 1) return;
-                    setState(() {
-                      animationController.duration =
-                          animationController.duration! -
-                              const Duration(seconds: 1);
-                    });
+                    final item = selected;
+                    if (item != null) {
+                      final keyframes = {...item.keyframes};
+                      keyframes
+                          .putIfAbsent(
+                              'x',
+                              () => SplayTreeSet(
+                                  (a, b) => a.frame.compareTo(b.frame)))
+                          .add(Keyframe(
+                            property: 'x',
+                            frame:
+                                _rateToFrame(animationController.value).toInt(),
+                            value: item.transform.getTranslation().x,
+                          ));
+                      keyframes
+                          .putIfAbsent(
+                              'y',
+                              () => SplayTreeSet(
+                                  (a, b) => a.frame.compareTo(b.frame)))
+                          .add(Keyframe(
+                            property: 'y',
+                            frame:
+                                _rateToFrame(animationController.value).toInt(),
+                            value: item.transform.getTranslation().y,
+                          ));
+
+                      int index = items.indexOf(item);
+                      setState(() {
+                        items[index] =
+                            selected = item.copyWith(keyframes: keyframes);
+                      });
+                    }
                   },
-                  child: const Text('-1s'),
+                  icon: const Icon(Icons.add),
                 ),
-                TextButton(
+                IconButton(
                   onPressed: () {
-                    animationController.stop();
-                    if (animationController.duration!.inSeconds >= 10) return;
-                    setState(() {
-                      animationController.duration =
-                          animationController.duration! +
-                              const Duration(seconds: 1);
-                    });
+                    final item = selected;
+                    if (item != null) {
+                      //
+                      print(item);
+                    }
                   },
-                  child: const Text('+1s'),
+                  icon: const Icon(Icons.remove),
                 ),
               ],
             ),
@@ -406,6 +456,7 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                         frameCount: frameCount,
                         start: index * 10,
                         end: index * 10 + 10,
+                        item: selected,
                       );
                     },
                   ),
@@ -594,16 +645,22 @@ class TimelineTile extends StatelessWidget {
   final int frameCount;
   final int start;
   final int end;
+  final Item? item;
   const TimelineTile({
     super.key,
     required this.frameCount,
     required this.start,
     required this.end,
+    required this.item,
   });
 
   @override
   Widget build(BuildContext context) {
     final offset = ((frameCount - start) / (end - start)).clamp(0, 10);
+    final map = <int, List<Keyframe>>{};
+    for (final frame in item?.keyframes['x'] ?? <Keyframe>{}) {
+      map.putIfAbsent(frame.frame, () => []).add(frame);
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         return Stack(
@@ -643,6 +700,20 @@ class TimelineTile extends StatelessWidget {
                 ),
               ),
             ),
+            for (int i = start; i < end; i++)
+              if (map.containsKey(i))
+                Positioned(
+                  top: 0,
+                  bottom: 0,
+                  left: i * constraints.maxWidth / 10,
+                  child: Center(
+                    child: Container(
+                      width: 6,
+                      height: 6,
+                      color: Colors.red,
+                    ),
+                  ),
+                ),
           ],
         );
       },

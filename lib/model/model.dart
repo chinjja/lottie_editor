@@ -34,7 +34,7 @@ extension ModelX on Model {
 class Item with _$Item {
   const factory Item({
     int? id,
-    @Default([]) List<Keyframe> keyframes,
+    @Default({}) Map<String, Set<Keyframe>> keyframes,
     required Color color,
     required Matrix4 transform,
     required Model model,
