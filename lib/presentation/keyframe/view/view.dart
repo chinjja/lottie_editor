@@ -38,8 +38,12 @@ class _KeyframeEditorState extends State<KeyframeEditor>
   double itemExtent = 36.0;
   double scrollOffset = 0.0;
   int framesPerItem = 10;
-  final view = Matrix4.identity();
   ContextMode mode = ContextMode.view;
+
+  Matrix4 _screenOrigin(BoxConstraints constraints) {
+    final offset = constraints.biggest.center(Offset.zero);
+    return Matrix4.translationValues(offset.dx, offset.dy, 0);
+  }
 
   @override
   void initState() {
@@ -99,7 +103,6 @@ class _KeyframeEditorState extends State<KeyframeEditor>
   List<Animation<Offset>> animations = [];
   Item? selected;
   final rand = math.Random();
-  late BoxConstraints constraints;
   int lastId = 1;
 
   Color _genColor() {
@@ -136,18 +139,24 @@ class _KeyframeEditorState extends State<KeyframeEditor>
     ).animate(animationController);
   }
 
-  int? _hitTest(Offset position) {
+  int? _hitTest(Matrix4 origin, Offset position) {
     int? hitIndex;
     for (int i = items.length - 1; i >= 0; i--) {
       final model = _modelItem(i);
       if (mode == ContextMode.edit && !model.selected) continue;
 
-      if (model.hitTest(position - animations[i].value)) {
+      if (model.hitTest(origin, position - animations[i].value)) {
         hitIndex = i;
         break;
       }
     }
     return hitIndex;
+  }
+
+  int? _hitTestForVertex(Matrix4 origin, Item item, Offset position) {
+    final index = items.indexOf(item);
+    return _modelItem(index)
+        .hitTestForVertex(origin, position - animations[index].value);
   }
 
   ModelItem _modelItem(int i) {
@@ -173,30 +182,33 @@ class _KeyframeEditorState extends State<KeyframeEditor>
               actions: [
                 IconButton(
                   onPressed: () {
+                    final scale = rand.nextDouble() * 50 + 50;
+                    const origin = Offset.zero;
+                    final startRadian = rand.nextDouble() * math.pi;
+                    final n = rand.nextInt(4) + 3;
+                    final stepRadian = math.pi * 2 / n;
+                    List<Offset> vs = [];
+                    for (int i = 0; i < n; i++) {
+                      final radian = startRadian + stepRadian * i;
+                      final x = math.cos(radian);
+                      final y = math.sin(radian);
+                      vs.add(Offset(x, y) * scale + origin);
+                    }
+                    final model = Model(
+                      origin: origin,
+                      data: vs,
+                    );
+                    final item = Item(
+                      id: lastId,
+                      color: _genColor(),
+                      model: model,
+                      transform: Matrix4.identity(),
+                    );
                     setState(() {
-                      final center = Offset(
-                        rand.nextDouble(),
-                        rand.nextDouble(),
-                      );
-                      const model = Model(
-                        origin: Offset(50, 50),
-                        data: [
-                          Offset.zero,
-                          Offset(100, 0),
-                          Offset(100, 100),
-                          Offset(0, 100),
-                        ],
-                      );
-                      final item = Item(
-                        id: lastId,
-                        color: _genColor(),
-                        model: model,
-                        transform:
-                            Matrix4.translationValues(center.dx, center.dy, 0),
-                      );
                       lastId++;
                       items.add(item);
                       animations.add(_genAnimation(item));
+                      selected = item;
                     });
                   },
                   icon: const Icon(Icons.add),
@@ -210,7 +222,25 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                         }
                       : null,
                   icon: const Icon(Icons.edit),
-                )
+                ),
+                PopupMenuButton(
+                  itemBuilder: (context) {
+                    return const [
+                      PopupMenuItem(
+                        value: 'clear',
+                        child: Text('Clear'),
+                      ),
+                    ];
+                  },
+                  onSelected: (value) {
+                    setState(() {
+                      items.clear();
+                      animations.clear();
+                      selected = null;
+                      lastId = 1;
+                    });
+                  },
+                ),
               ],
             )
           : AppBar(
@@ -230,55 +260,82 @@ class _KeyframeEditorState extends State<KeyframeEditor>
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  this.constraints = constraints;
-                  return ClipRect(
-                    child: Transform(
-                      transform: view,
-                      child: SizedBox(
-                        width: double.infinity,
-                        height: double.infinity,
-                        child: GestureDetector(
-                          onTapDown: mode == ContextMode.view
-                              ? (details) {
-                                  final hitIndex =
-                                      _hitTest(details.localPosition);
-                                  setState(() {
-                                    if (hitIndex != null) {
-                                      selected = items[hitIndex];
-                                    } else {
-                                      selected = null;
-                                    }
-                                  });
-                                }
-                              : null,
-                          onPanStart: (details) {
-                            _dragIndex = _hitTest(details.localPosition);
-                          },
-                          onPanUpdate: (details) {
-                            final i = _dragIndex;
-                            if (i != null) {
+                  final origin = _screenOrigin(constraints);
+                  return InteractiveViewer(
+                    boundaryMargin: const EdgeInsets.all(double.infinity),
+                    minScale: 0.1,
+                    maxScale: 10.0,
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: double.infinity,
+                      child: GestureDetector(
+                        onTapDown: mode == ContextMode.view
+                            ? (details) {
+                                final hitIndex =
+                                    _hitTest(origin, details.localPosition);
+                                setState(() {
+                                  if (hitIndex != null) {
+                                    selected = items[hitIndex];
+                                  } else {
+                                    selected = null;
+                                  }
+                                });
+                              }
+                            : null,
+                        onLongPress: () {
+                          if (selected != null) {
+                            setState(() {
+                              mode = ContextMode.edit;
+                            });
+                          }
+                        },
+                        onPanStart: (details) {
+                          if (mode == ContextMode.view) {
+                            _dragIndex =
+                                _hitTest(origin, details.localPosition);
+                          } else {
+                            _dragIndex = _hitTestForVertex(
+                              origin,
+                              selected!,
+                              details.localPosition,
+                            );
+                          }
+                        },
+                        onPanUpdate: (details) {
+                          final i = _dragIndex;
+                          if (i != null) {
+                            if (mode == ContextMode.view) {
                               setState(() {
                                 items[i] =
                                     selected = items[i].move(details.delta);
                               });
+                            } else {
+                              setState(() {
+                                final data = [...selected!.model.data];
+                                data[i] = data[i] + details.delta;
+                                final index = items.indexOf(selected!);
+                                items[index] = selected =
+                                    selected!.copyWith.model(data: data);
+                              });
                             }
-                          },
-                          onPanEnd: (details) {
-                            _dragIndex = null;
-                          },
-                          child: AnimatedBuilder(
-                              animation: animationController,
-                              builder: (context, child) {
-                                return ItemWidget(
-                                  mode: mode,
-                                  items: items
-                                      .asMap()
-                                      .map((i, e) => MapEntry(i, _modelItem(i)))
-                                      .values
-                                      .toList(),
-                                );
-                              }),
-                        ),
+                          }
+                        },
+                        onPanEnd: (details) {
+                          _dragIndex = null;
+                        },
+                        child: AnimatedBuilder(
+                            animation: animationController,
+                            builder: (context, child) {
+                              return ItemWidget(
+                                transform: origin,
+                                mode: mode,
+                                items: items
+                                    .asMap()
+                                    .map((i, e) => MapEntry(i, _modelItem(i)))
+                                    .values
+                                    .toList(),
+                              );
+                            }),
                       ),
                     ),
                   );
@@ -408,21 +465,68 @@ class ModelItem with _$ModelItem {
 }
 
 extension ModelItemX on ModelItem {
-  bool hitTest(Offset position) {
+  bool hitTest(Matrix4 view, Offset position) {
     final path = Path()..addPolygon(item.model.data, true);
-    return path.transform(item.transform.storage).contains(position);
+    final m = view * item.transform;
+    return path.transform(m.storage).contains(position);
+  }
+
+  int? hitTestForVertex(Matrix4 view, Offset position) {
+    for (int i = 0; i < item.model.data.length; i++) {
+      final center = item.model.data[i];
+
+      final path = Path()..addOval(Rect.fromCircle(center: center, radius: 8));
+      final m = view * item.transform;
+      if (path.transform(m.storage).contains(position)) {
+        return i;
+      }
+    }
+    return null;
   }
 }
 
 class ModelPainter extends CustomPainter {
+  final Matrix4 transform;
   final List<ModelItem> items;
   final ContextMode mode;
 
-  ModelPainter({required this.items, required this.mode});
+  ModelPainter({
+    required this.transform,
+    required this.items,
+    required this.mode,
+  });
+
+  @override
+  bool? hitTest(Offset position) {
+    for (int i = items.length - 1; i >= 0; i--) {
+      final model = items[i];
+      if (mode == ContextMode.edit && !model.selected) continue;
+
+      if (mode == ContextMode.view) {
+        if (model.hitTest(transform * model.animation, position)) {
+          return true;
+        }
+      } else {
+        if (model.hitTestForVertex(transform * model.animation, position) !=
+            null) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
+    canvas.transform(transform.storage);
+
     final paint = Paint();
+    paint.color = Colors.black;
+
+    final h = Offset(size.width, 0) * 10;
+    final v = Offset(0, size.height) * 10;
+    canvas.drawLine(-h, h, paint);
+    canvas.drawLine(-v, v, paint);
 
     for (final model in items) {
       if (mode == ContextMode.edit && !model.selected) continue;
@@ -462,15 +566,19 @@ class ModelPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(ModelPainter oldDelegate) {
-    return items != oldDelegate.items || mode != oldDelegate.mode;
+    return transform != oldDelegate.transform ||
+        items != oldDelegate.items ||
+        mode != oldDelegate.mode;
   }
 }
 
 class ItemWidget extends StatelessWidget {
+  final Matrix4 transform;
   final List<ModelItem> items;
   final ContextMode mode;
   const ItemWidget({
     super.key,
+    required this.transform,
     required this.items,
     required this.mode,
   });
@@ -479,7 +587,7 @@ class ItemWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return CustomPaint(
       willChange: true,
-      painter: ModelPainter(items: items, mode: mode),
+      painter: ModelPainter(transform: transform, items: items, mode: mode),
     );
   }
 }
