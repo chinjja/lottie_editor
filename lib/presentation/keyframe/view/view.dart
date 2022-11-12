@@ -269,36 +269,34 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                       width: double.infinity,
                       height: double.infinity,
                       child: GestureDetector(
-                        onTapDown: mode == ContextMode.view
-                            ? (details) {
-                                final hitIndex =
-                                    _hitTest(origin, details.localPosition);
-                                setState(() {
-                                  if (hitIndex != null) {
-                                    selected = items[hitIndex];
-                                  } else {
-                                    selected = null;
-                                  }
-                                });
+                        onTapDown: (details) {
+                          if (mode == ContextMode.view) {
+                            final index =
+                                _hitTest(origin, details.localPosition);
+                            setState(() {
+                              if (index != null) {
+                                selected = items[index];
+                              } else {
+                                selected = null;
                               }
-                            : null,
+                              _dragIndex = index;
+                            });
+                          } else {
+                            final index = _hitTestForVertex(
+                              origin,
+                              selected!,
+                              details.localPosition,
+                            );
+                            setState(() {
+                              _dragIndex = index;
+                            });
+                          }
+                        },
                         onLongPress: () {
                           if (selected != null) {
                             setState(() {
                               mode = ContextMode.edit;
                             });
-                          }
-                        },
-                        onPanStart: (details) {
-                          if (mode == ContextMode.view) {
-                            _dragIndex =
-                                _hitTest(origin, details.localPosition);
-                          } else {
-                            _dragIndex = _hitTestForVertex(
-                              origin,
-                              selected!,
-                              details.localPosition,
-                            );
                           }
                         },
                         onPanUpdate: (details) {
