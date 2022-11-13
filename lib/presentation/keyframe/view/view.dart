@@ -172,7 +172,8 @@ class _KeyframeEditorState extends State<KeyframeEditor>
     );
   }
 
-  int? _dragIndex;
+  int? _vertexIndex;
+  int? _selectedIndex;
 
   @override
   Widget build(BuildContext context) {
@@ -219,6 +220,7 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                       ? () {
                           setState(() {
                             mode = ContextMode.edit;
+                            _vertexIndex = null;
                           });
                         }
                       : null,
@@ -280,7 +282,7 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                               } else {
                                 selected = null;
                               }
-                              _dragIndex = index;
+                              _selectedIndex = index;
                             });
                           } else {
                             final index = _hitTestForVertex(
@@ -289,7 +291,9 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                               details.localPosition,
                             );
                             setState(() {
-                              _dragIndex = index;
+                              if (index != null) {
+                                _vertexIndex = index;
+                              }
                             });
                           }
                         },
@@ -297,30 +301,29 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                           if (selected != null) {
                             setState(() {
                               mode = ContextMode.edit;
+                              _vertexIndex = null;
                             });
                           }
                         },
                         onPanUpdate: (details) {
-                          final i = _dragIndex;
-                          if (i != null) {
-                            if (mode == ContextMode.view) {
-                              setState(() {
-                                items[i] =
-                                    selected = items[i].move(details.delta);
-                              });
-                            } else {
-                              setState(() {
-                                final data = [...selected!.model.data];
-                                data[i] = data[i] + details.delta;
-                                final index = items.indexOf(selected!);
-                                items[index] = selected =
-                                    selected!.copyWith.model(data: data);
-                              });
-                            }
+                          if (mode == ContextMode.view) {
+                            final i = _selectedIndex;
+                            if (i == null) return;
+                            setState(() {
+                              items[i] =
+                                  selected = items[i].move(details.delta);
+                            });
+                          } else {
+                            final i = _vertexIndex;
+                            if (i == null) return;
+                            setState(() {
+                              final data = [...selected!.model.data];
+                              data[i] = data[i] + details.delta;
+                              final index = items.indexOf(selected!);
+                              items[index] = selected =
+                                  selected!.copyWith.model(data: data);
+                            });
                           }
-                        },
-                        onPanEnd: (details) {
-                          _dragIndex = null;
                         },
                         child: AnimatedBuilder(
                             animation: animationController,
@@ -333,6 +336,7 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                                     .map((i, e) => MapEntry(i, _modelItem(i)))
                                     .values
                                     .toList(),
+                                selectedIndex: _vertexIndex,
                               );
                             }),
                       ),
@@ -524,7 +528,7 @@ extension ModelItemX on ModelItem {
     for (int i = 0; i < item.model.data.length; i++) {
       final center = item.model.data[i];
 
-      final path = Path()..addOval(Rect.fromCircle(center: center, radius: 8));
+      final path = Path()..addOval(Rect.fromCircle(center: center, radius: 24));
       final m = view * item.transform;
       if (path.transform(m.storage).contains(position)) {
         return i;
@@ -538,18 +542,20 @@ class ModelPainter extends CustomPainter {
   final Matrix4 transform;
   final List<ModelItem> items;
   final ContextMode mode;
+  final int? selectedIndex;
 
   ModelPainter({
     required this.transform,
     required this.items,
     required this.mode,
+    required this.selectedIndex,
   });
 
   @override
   bool? hitTest(Offset position) {
+    if (mode == ContextMode.edit) return null;
     for (int i = items.length - 1; i >= 0; i--) {
       final model = items[i];
-      if (mode == ContextMode.edit && !model.selected) continue;
 
       if (mode == ContextMode.view) {
         if (model.hitTest(transform * model.animation, position)) {
@@ -602,9 +608,14 @@ class ModelPainter extends CustomPainter {
       canvas.drawCircle(model.item.model.origin, 2, paint);
 
       if (mode == ContextMode.edit) {
-        paint.color = Colors.black;
         paint.style = PaintingStyle.fill;
-        for (final p in model.item.model.data) {
+        for (int i = 0; i < model.item.model.data.length; i++) {
+          if (i == selectedIndex) {
+            paint.color = Colors.orange;
+          } else {
+            paint.color = Colors.black;
+          }
+          final p = model.item.model.data[i];
           canvas.drawCircle(p, 4, paint);
         }
       }
@@ -625,18 +636,25 @@ class ItemWidget extends StatelessWidget {
   final Matrix4 transform;
   final List<ModelItem> items;
   final ContextMode mode;
+  final int? selectedIndex;
   const ItemWidget({
     super.key,
     required this.transform,
     required this.items,
     required this.mode,
+    required this.selectedIndex,
   });
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
       willChange: true,
-      painter: ModelPainter(transform: transform, items: items, mode: mode),
+      painter: ModelPainter(
+        transform: transform,
+        items: items,
+        mode: mode,
+        selectedIndex: selectedIndex,
+      ),
     );
   }
 }
