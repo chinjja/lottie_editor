@@ -36,9 +36,9 @@ class _KeyframeEditorState extends State<KeyframeEditor>
     duration: const Duration(milliseconds: 2000),
   );
 
-  double itemExtent = 36.0;
+  double frameWidth = 4;
+  double keyframeWidth = 4;
   double scrollOffset = 0.0;
-  int framesPerItem = 10;
   ContextMode mode = ContextMode.view;
 
   Matrix4 _screenOrigin(BoxConstraints constraints) {
@@ -51,11 +51,17 @@ class _KeyframeEditorState extends State<KeyframeEditor>
     super.initState();
 
     animationController.addStatusListener((status) {
-      if (status == AnimationStatus.completed) {
-        // final pixels = frameToPixels(frameCount);
-        // scrollController.jumpTo(pixels);
-      } else if (status == AnimationStatus.dismissed) {
-        scrollController.jumpTo(scrollController.position.minScrollExtent);
+      switch (status) {
+        case AnimationStatus.dismissed:
+          _restore();
+          scrollController.jumpTo(scrollController.position.minScrollExtent);
+          break;
+        case AnimationStatus.forward:
+        case AnimationStatus.reverse:
+          _restore();
+          break;
+        case AnimationStatus.completed:
+          break;
       }
       setState(() {});
     });
@@ -88,11 +94,11 @@ class _KeyframeEditorState extends State<KeyframeEditor>
   }
 
   double _frameToPixels(double frame) {
-    return (itemExtent / 10) * frame;
+    return frameWidth * frame;
   }
 
   double _pixelsToFrame(double pixels) {
-    return pixels / (itemExtent / 10);
+    return pixels / frameWidth;
   }
 
   double _pixelsToRate(double pixels) {
@@ -101,7 +107,9 @@ class _KeyframeEditorState extends State<KeyframeEditor>
   }
 
   List<Item> items = [];
-  List<Animation<Offset>> animations = [];
+  List<Animation<double>> xAnimations = [];
+  List<Animation<double>> yAnimations = [];
+  Map<String, Animation<double>> _map = {};
   Item? selected;
   final rand = math.Random();
   int lastId = 1;
@@ -115,29 +123,61 @@ class _KeyframeEditorState extends State<KeyframeEditor>
     );
   }
 
-  Animation<Offset> _genAnimation(Item item) {
-    // return TweenSequence([
-    //   ...item.keyframes.map(
-    //     (e) => TweenSequenceItem(
-    //       tween: Tween(begin: Offset.zero, end: const Offset(1, 1)),
-    //       weight: 1,
-    //     ),
-    //   )
-    // ]).animate(animationController);
-
-    return TweenSequence(
-      [
-        TweenSequenceItem(
-          tween: Tween(
-              begin: Offset.zero,
-              end: Offset(
-                rand.nextDouble() * 200 - 100,
-                rand.nextDouble() * 200 - 100,
-              )),
-          weight: 1.0,
-        ),
-      ],
-    ).animate(animationController);
+  Map<String, Animation<double>> _buildAnimation(Item item) {
+    if (item.keyframes.isEmpty) {
+      return {
+        'x': Tween(begin: 0.0, end: 0.0).animate(animationController),
+        'y': Tween(begin: 0.0, end: 0.0).animate(animationController),
+      };
+    }
+    Map<String, Animation<double>> result = {};
+    for (final e in item.keyframes.entries) {
+      List<TweenSequenceItem<double>> list = [];
+      final frames = [...e.value]..sort((a, b) => a.frame.compareTo(b.frame));
+      for (int i = 0; i < frames.length; i++) {
+        final keyframe = frames[i];
+        if (list.isEmpty) {
+          list.add(
+            TweenSequenceItem(
+              tween: Tween(
+                begin: 0.0,
+                end: keyframe.value,
+              ),
+              weight: (keyframe.frame + 1) / frameCount,
+            ),
+          );
+        }
+        if (i < frames.length - 1) {
+          final nextKeyframe = frames[i + 1];
+          list.add(
+            TweenSequenceItem(
+              tween: Tween(
+                begin: keyframe.value,
+                end: nextKeyframe.value,
+              ),
+              weight: (nextKeyframe.frame - keyframe.frame) / frameCount,
+            ),
+          );
+        } else if (keyframe.frame < frameCount) {
+          list.add(
+            TweenSequenceItem(
+              tween: Tween(
+                begin: keyframe.value,
+                end: keyframe.value,
+              ),
+              weight: (frameCount - keyframe.frame) / frameCount,
+            ),
+          );
+        }
+      }
+      if (list.isEmpty) {
+        result[e.key] =
+            Tween(begin: 0.0, end: 0.0).animate(animationController);
+      } else {
+        result[e.key] = TweenSequence(list).animate(animationController);
+      }
+    }
+    return result;
   }
 
   int? _hitTest(Matrix4 origin, Offset position) {
@@ -146,7 +186,8 @@ class _KeyframeEditorState extends State<KeyframeEditor>
       final model = _modelItem(i);
       if (mode == ContextMode.edit && !model.selected) continue;
 
-      if (model.hitTest(origin, position - animations[i].value)) {
+      if (model.hitTest(origin,
+          position - Offset(xAnimations[i].value, yAnimations[i].value))) {
         hitIndex = i;
         break;
       }
@@ -156,8 +197,8 @@ class _KeyframeEditorState extends State<KeyframeEditor>
 
   int? _hitTestForVertex(Matrix4 origin, Item item, Offset position) {
     final index = items.indexOf(item);
-    return _modelItem(index)
-        .hitTestForVertex(origin, position - animations[index].value);
+    return _modelItem(index).hitTestForVertex(origin,
+        position - Offset(xAnimations[index].value, yAnimations[index].value));
   }
 
   ModelItem _modelItem(int i) {
@@ -165,8 +206,8 @@ class _KeyframeEditorState extends State<KeyframeEditor>
       item: items[i],
       selected: items[i] == selected,
       animation: Matrix4.translationValues(
-        animations[i].value.dx,
-        animations[i].value.dy,
+        xAnimations[i].value,
+        yAnimations[i].value,
         0,
       ),
     );
@@ -209,7 +250,9 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                     setState(() {
                       lastId++;
                       items.add(item);
-                      animations.add(_genAnimation(item));
+                      _map = _buildAnimation(item);
+                      xAnimations.add(_map['x']!);
+                      yAnimations.add(_map['y']!);
                       selected = item;
                     });
                   },
@@ -238,7 +281,8 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                   onSelected: (value) {
                     setState(() {
                       items.clear();
-                      animations.clear();
+                      xAnimations.clear();
+                      yAnimations.clear();
                       selected = null;
                       lastId = 1;
                     });
@@ -356,6 +400,16 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                       animationController.duration =
                           animationController.duration! +
                               const Duration(seconds: 1);
+
+                      final item = selected;
+                      if (item != null) {
+                        int index = items.indexOf(item);
+                        items[index] =
+                            selected = item.copyWith(keyframes: item.keyframes);
+                        _map = _buildAnimation(items[index]);
+                        xAnimations[index] = _map['x']!;
+                        yAnimations[index] = _map['y']!;
+                      }
                     });
                   },
                   child: const Text('+1s'),
@@ -368,6 +422,16 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                       animationController.duration =
                           animationController.duration! -
                               const Duration(seconds: 1);
+
+                      final item = selected;
+                      if (item != null) {
+                        int index = items.indexOf(item);
+                        items[index] =
+                            selected = item.copyWith(keyframes: item.keyframes);
+                        _map = _buildAnimation(items[index]);
+                        xAnimations[index] = _map['x']!;
+                        yAnimations[index] = _map['y']!;
+                      }
                     });
                   },
                   child: const Text('-1s'),
@@ -400,6 +464,7 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                     final item = selected;
                     if (item != null) {
                       final keyframes = {...item.keyframes};
+                      final v = item.transform.getTranslation();
                       keyframes
                           .putIfAbsent(
                               'x',
@@ -409,7 +474,7 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                             property: 'x',
                             frame:
                                 _rateToFrame(animationController.value).toInt(),
-                            value: item.transform.getTranslation().x,
+                            value: v.x,
                           ));
                       keyframes
                           .putIfAbsent(
@@ -420,91 +485,145 @@ class _KeyframeEditorState extends State<KeyframeEditor>
                             property: 'y',
                             frame:
                                 _rateToFrame(animationController.value).toInt(),
-                            value: item.transform.getTranslation().y,
+                            value: v.y,
                           ));
 
                       int index = items.indexOf(item);
                       setState(() {
-                        items[index] =
-                            selected = item.copyWith(keyframes: keyframes);
+                        items[index] = selected = item.copyWith(
+                          keyframes: keyframes,
+                        );
+                        _map = _buildAnimation(items[index]);
+                        xAnimations[index] = _map['x']!;
+                        yAnimations[index] = _map['y']!;
                       });
                     }
                   },
                   icon: const Icon(Icons.add),
                 ),
-                IconButton(
-                  onPressed: () {
-                    final item = selected;
-                    if (item != null) {
-                      //
-                      print(item);
-                    }
-                  },
-                  icon: const Icon(Icons.remove),
+                const IconButton(
+                  onPressed: null,
+                  icon: Icon(Icons.remove),
                 ),
               ],
             ),
             const Divider(),
-            Stack(
-              children: [
-                SizedBox(
-                  height: 150,
-                  child: ListView.builder(
-                    controller: scrollController,
-                    scrollDirection: Axis.horizontal,
-                    padding: EdgeInsets.only(left: itemExtent / 2),
-                    itemCount: (frameCount + 120) ~/ 10,
-                    itemExtent: itemExtent,
-                    itemBuilder: (context, index) {
-                      return TimelineTile(
-                        frameCount: frameCount,
-                        start: index * 10,
-                        end: index * 10 + 10,
-                        item: selected,
+            SingleChildScrollView(
+              controller: scrollController,
+              scrollDirection: Axis.horizontal,
+              child: Stack(
+                children: [
+                  SizedBox(
+                    width: frameCount * frameWidth * 2,
+                    height: 150,
+                  ),
+                  Positioned(
+                    top: 0,
+                    bottom: 0,
+                    left: frameWidth * 5,
+                    child: SizedBox(
+                      width: frameCount * frameWidth,
+                      child: Container(
+                        color: Colors.grey.withAlpha(96),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    bottom: 0,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: List.generate(
+                        frameCount ~/ 10 * 2,
+                        (index) => SizedBox(
+                          width: frameWidth * 10,
+                          child: Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                ),
+                                child: Text(
+                                  '${index * 10}',
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                              const Expanded(
+                                child: VerticalDivider(),
+                              )
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  AnimatedBuilder(
+                    animation: animationController,
+                    builder: (context, child) {
+                      return Positioned(
+                        top: 0,
+                        bottom: 0,
+                        left: frameWidth * 5 +
+                            _rateToPixels(animationController.value),
+                        child: Container(
+                          color: Colors.blue,
+                          width: 2,
+                        ),
                       );
                     },
                   ),
-                ),
-                AnimatedBuilder(
-                  animation: animationController,
-                  builder: (context, child) {
-                    return Positioned(
+                  for (final keyframe
+                      in selected?.keyframes['x'] ?? <Keyframe>{})
+                    Positioned(
+                      key: ValueKey(keyframe.frame),
                       top: 0,
                       bottom: 0,
-                      left: itemExtent / 2 +
-                          _rateToPixels(animationController.value) -
-                          scrollOffset,
-                      child: Container(
-                        color: Colors.blue,
-                        width: 2,
+                      left: frameWidth * 5 +
+                          keyframe.frame * frameWidth +
+                          keyframeWidth / 2,
+                      child: Center(
+                        child: Container(
+                          width: keyframeWidth,
+                          height: keyframeWidth,
+                          color: Colors.red,
+                        ),
                       ),
-                    );
-                  },
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onHorizontalDragUpdate: (details) {
-                      animationController.value +=
-                          _pixelsToRate(details.delta.dx);
-                    },
-                    onTapUp: (details) {
-                      final dx = details.localPosition.dx;
-                      animationController.value =
-                          _pixelsToRate(dx - itemExtent / 2 - scrollOffset);
-                    },
-                    child: const SizedBox(height: 40),
+                    ),
+                  Positioned(
+                    top: 0,
+                    left: frameWidth * 5,
+                    right: 0,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onHorizontalDragUpdate: (details) {
+                        _restore();
+                        animationController.value +=
+                            _pixelsToRate(details.delta.dx);
+                      },
+                      onTapUp: (details) {
+                        _restore();
+                        final dx = details.localPosition.dx;
+                        animationController.value = _pixelsToRate(dx);
+                      },
+                      child: const SizedBox(height: 40),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  void _restore() {
+    if (selected != null) {
+      final idx = items.indexOf(selected!);
+      items[idx] =
+          selected = items[idx].copyWith(transform: Matrix4.identity());
+    }
   }
 }
 
@@ -655,86 +774,6 @@ class ItemWidget extends StatelessWidget {
         mode: mode,
         selectedIndex: selectedIndex,
       ),
-    );
-  }
-}
-
-class TimelineTile extends StatelessWidget {
-  final int frameCount;
-  final int start;
-  final int end;
-  final Item? item;
-  const TimelineTile({
-    super.key,
-    required this.frameCount,
-    required this.start,
-    required this.end,
-    required this.item,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final offset = ((frameCount - start) / (end - start)).clamp(0, 10);
-    final map = <int, List<Keyframe>>{};
-    for (final frame in item?.keyframes['x'] ?? <Keyframe>{}) {
-      map.putIfAbsent(frame.frame, () => []).add(frame);
-    }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Stack(
-          children: [
-            SizedBox(
-              width: offset * constraints.maxWidth,
-              height: double.infinity,
-              child: const Opacity(
-                opacity: 0.2,
-                child: ColoredBox(
-                  color: Colors.grey,
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: Transform.translate(
-                offset: Offset(-constraints.maxWidth / 2 + 1, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    SizedBox(
-                      height: 40,
-                      child: Center(
-                        child: Text('$start'),
-                      ),
-                    ),
-                    Expanded(
-                      child: Row(
-                        children: const [
-                          Spacer(),
-                          VerticalDivider(),
-                          Spacer(),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            for (int i = start; i < end; i++)
-              if (map.containsKey(i))
-                Positioned(
-                  top: 0,
-                  bottom: 0,
-                  left: i * constraints.maxWidth / 10,
-                  child: Center(
-                    child: Container(
-                      width: 6,
-                      height: 6,
-                      color: Colors.red,
-                    ),
-                  ),
-                ),
-          ],
-        );
-      },
     );
   }
 }
